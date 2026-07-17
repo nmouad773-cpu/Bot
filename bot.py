@@ -7,12 +7,15 @@ import json
 # ضع توكن بوت التلغرام الخاص بك هنا
 TELEGRAM_BOT_TOKEN = '8322167386:AAG7QRrtTwJNJ2da2j08LSq977zub1yyjTE'
 
-# الـ Access Token الخاص بك المدمج في الكود
+# الـ Access Token الخاص بصفحتك على فيسبوك
 ACCESS_TOKEN = "EAAOegvFEZCzABR7uYSrVM63berz3UYcXDE7kgSXtEtsXNsW1AY4z2cLjA3mji1X2aCOc9mkUakirvqmFUoaTQY4ynm3WZB2NOXAt7ZA38a0NyXWb2lteqeNHpfv5Kg6WFBOkZCG8kFGPhNGwV3t0VqpzBruw3OVfcZA9qijyGvPkRA8aqoAdarOXN12PO0k80UVoe"
+
+# معرف الصفحة الخاص بك (Page ID)
+PAGE_ID = "1078731531992880"
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# تخزين الحالة (تم إضافة حقل للوصف الافتراضي هنا)
+# تخزين الحالة
 current_stream = {"process": None, "live_video_id": None, "stream_url": None, "m3u8_url": None, "title": "بث مباشر", "description": "بث مباشر"}
 user_state = {} 
 
@@ -30,13 +33,12 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.reply_to(message, "مرحباً بك! تحكم بالبث المباشر عبر الأزرار أدناه:", reply_markup=get_main_menu())
+    bot.reply_to(message, "مرحباً بك! تحكم بالبث المباشر لصفحتك عبر الأزرار أدناه:", reply_markup=get_main_menu())
 
 # --- معالجة ضغطات الأزرار ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     if call.data == "start_live":
-        # التعديل: نطلب الوصف أولاً
         user_state[call.message.chat.id] = "waiting_for_description"
         bot.answer_callback_query(call.id)
         bot.send_message(call.message.chat.id, "📝 يرجى إرسال [وصف البث] المباشر الآن:")
@@ -52,7 +54,7 @@ def callback_query(call):
 
     elif call.data == "status":
         bot.answer_callback_query(call.id)
-        status_msg = f"🟢 البث يعمل حالياً بنشاط بنظام Copy.\n📝 الوصف: {current_stream['description']}\n🔗 الرابط: `{current_stream['m3u8_url']}`" if current_stream["process"] and current_stream["process"].poll() is None else "🔴 البث متوقف حالياً."
+        status_msg = f"🟢 البث يعمل حالياً بنشاط بنظام Copy المباشر.\n📝 الوصف: {current_stream['description']}\n🔗 الرابط: `{current_stream['m3u8_url']}`" if current_stream["process"] and current_stream["process"].poll() is None else "🔴 البث متوقف حالياً."
         bot.send_message(call.message.chat.id, status_msg, parse_mode="Markdown")
 
 # --- استقبال المدخلات النصية (الوصف والروابط) ---
@@ -62,37 +64,33 @@ def handle_inputs(message):
     text = message.text.strip()
     
     if state == "waiting_for_description":
-        # حفظ الوصف والانتقال لطلب الرابط
         current_stream["description"] = text
         user_state[message.chat.id] = "waiting_for_link"
         bot.send_message(message.chat.id, f"✅ تم حفظ الوصف بنجاح.\n🚀 الآن، يرجى إرسال رابط البث (M3U8) للبدء:")
         
     elif state == "waiting_for_link":
-        # مسح الحالة وتشغيل البث بالرابط المرسل
         user_state.pop(message.chat.id, None)
         start_live_func(message, text)
         
     elif state == "waiting_for_new_link":
-        # مسح الحالة وتغيير الرابط
         user_state.pop(message.chat.id, None)
         change_link_func(message, text)
 
 # --- دالة بدء البث المباشر ---
 def start_live_func(message, m3u8_url):
-    bot.reply_to(message, "⏳ جاري إنشاء البث وتطبيق القيود الجغرافية...")
+    bot.reply_to(message, "⏳ جاري إنشاء البث وتطبيق القيود الجغرافية على الصفحة...")
     
     targeting = {"geo_locations": {"countries": ARAB_COUNTRIES}}
-    
-    # جلب الوصف الذي أدخله المستخدم
     live_description = current_stream.get("description", "بث مباشر")
     
-    fb_url = "https://graph.facebook.com/v19.0/me/live_videos"
+    # رابط البث المباشر الموجه للصفحة مباشرة
+    fb_url = f"https://graph.facebook.com/v19.0/{PAGE_ID}/live_videos"
     payload = {
-        'title': live_description,        # تم ربط العنوان بالوصف المرسل
-        'description': live_description,  # تم ربط الوصف بالوصف المرسل
+        'title': live_description,
+        'description': live_description,
         'status': 'LIVE_NOW', 
         'targeting': json.dumps(targeting), 
-        'is_dvr_enabled': 'false', # 🔒 تعطيل خاصية إرجاع الفيديو للخلف
+        'is_dvr_enabled': 'false', # 🔒 منع إرجاع الفيديو للخلف مفعل
         'access_token': ACCESS_TOKEN
     }
     
@@ -104,7 +102,7 @@ def start_live_func(message, m3u8_url):
 
         current_stream.update({"stream_url": response["stream_url"], "live_video_id": response["id"], "m3u8_url": m3u8_url})
         
-        # أمر FFmpeg بنظام الـ Copy المباشر والخفيف
+        # أمر FFmpeg بنظام الـ Copy المباشر (بدون ترميز) بناءً على طلبك
         cmd = [
             'ffmpeg', '-re', 
             '-i', m3u8_url, 
@@ -113,7 +111,7 @@ def start_live_func(message, m3u8_url):
         ]
         
         current_stream["process"] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        bot.reply_to(message, f"✅ تم بدء البث بنجاح!\n• الوصف: {live_description}\n• النظام: Copy خفيف.\n• الميزات: تم قفل إرجاع الفيديو.")
+        bot.reply_to(message, f"✅ تم بدء البث بنجاح على صفحتك!\n• الوصف: {live_description}\n• النظام: Copy خفيف (بدون ترميز).\n• الميزات: تم قفل إرجاع الفيديو.")
     except Exception as e:
         bot.reply_to(message, f"❌ حدث خطأ أثناء تشغيل FFmpeg: {str(e)}")
 
@@ -133,6 +131,7 @@ def change_link_func(message, new_url):
         
     current_stream["m3u8_url"] = new_url
     
+    # التبديل بنظام الـ Copy المباشر أيضاً
     cmd = [
         'ffmpeg', '-re', 
         '-i', new_url, 
@@ -140,7 +139,7 @@ def change_link_func(message, new_url):
         '-f', 'flv', current_stream["stream_url"]
     ]
     current_stream["process"] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    bot.reply_to(message, "✅ تم تحديث رابط البث بنجاح دون انقطاع الفيديو.")
+    bot.reply_to(message, "✅ تم تحديث رابط البث بنجاح بنظام Copy وبدون انقطاع الفيديو.")
 
 # --- دالة إيقاف البث نهائياً ---
 def stop_live_func(message):
@@ -154,7 +153,7 @@ def stop_live_func(message):
         
         requests.post(f"https://graph.facebook.com/v19.0/{current_stream['live_video_id']}", data={'end_live_video': 'true', 'access_token': ACCESS_TOKEN})
         current_stream["process"] = None
-        bot.reply_to(message, "🏁 تم إنهاء وإغلاق البث المباشر بالكامل.")
+        bot.reply_to(message, "🏁 تم إنهاء وإغلاق البث المباشر بالكامل من الصفحة.")
     else:
         bot.reply_to(message, "❌ لا يوجد بث يعمل حالياً لإيقافه.")
 
