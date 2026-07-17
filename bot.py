@@ -12,11 +12,11 @@ ACCESS_TOKEN = "EAAOegvFEZCzABR7uYSrVM63berz3UYcXDE7kgSXtEtsXNsW1AY4z2cLjA3mji1X
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# تخزين الحالة
-current_stream = {"process": None, "live_video_id": None, "stream_url": None, "m3u8_url": None, "title": "بث مباشر"}
+# تخزين الحالة (تم إضافة حقل للوصف الافتراضي هنا)
+current_stream = {"process": None, "live_video_id": None, "stream_url": None, "m3u8_url": None, "title": "بث مباشر", "description": "بث مباشر"}
 user_state = {} 
 
-# الدول المسموح لها برؤية البث فقط (المغرب، الجزائر، تونس، ليبيا، العراق، سوريا، فلسطين، الأردن)
+# الدول المسموح لها برؤية البث فقط
 ARAB_COUNTRIES = ["MA", "DZ", "TN", "LY", "IQ", "SY", "PS", "JO"]
 
 # --- لوحة الأزرار ---
@@ -36,9 +36,10 @@ def welcome(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     if call.data == "start_live":
-        user_state[call.message.chat.id] = "waiting_for_link"
+        # التعديل: نطلب الوصف أولاً
+        user_state[call.message.chat.id] = "waiting_for_description"
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "🚀 يرجى إرسال رابط البث (M3U8) الآن للبدء:")
+        bot.send_message(call.message.chat.id, "📝 يرجى إرسال [وصف البث] المباشر الآن:")
 
     elif call.data == "stop_live":
         bot.answer_callback_query(call.id)
@@ -51,21 +52,30 @@ def callback_query(call):
 
     elif call.data == "status":
         bot.answer_callback_query(call.id)
-        status_msg = f"🟢 البث يعمل حالياً بنشاط بنظام Copy.\n🔗 الرابط: `{current_stream['m3u8_url']}`" if current_stream["process"] and current_stream["process"].poll() is None else "🔴 البث متوقف حالياً."
+        status_msg = f"🟢 البث يعمل حالياً بنشاط بنظام Copy.\n📝 الوصف: {current_stream['description']}\n🔗 الرابط: `{current_stream['m3u8_url']}`" if current_stream["process"] and current_stream["process"].poll() is None else "🔴 البث متوقف حالياً."
         bot.send_message(call.message.chat.id, status_msg, parse_mode="Markdown")
 
-# --- استقبال الروابط النصية ---
+# --- استقبال المدخلات النصية (الوصف والروابط) ---
 @bot.message_handler(func=lambda message: message.chat.id in user_state)
-def handle_link(message):
+def handle_inputs(message):
     state = user_state.get(message.chat.id)
-    url = message.text.strip()
+    text = message.text.strip()
     
-    if state == "waiting_for_link":
-        start_live_func(message, url)
+    if state == "waiting_for_description":
+        # حفظ الوصف والانتقال لطلب الرابط
+        current_stream["description"] = text
+        user_state[message.chat.id] = "waiting_for_link"
+        bot.send_message(message.chat.id, f"✅ تم حفظ الوصف بنجاح.\n🚀 الآن، يرجى إرسال رابط البث (M3U8) للبدء:")
+        
+    elif state == "waiting_for_link":
+        # مسح الحالة وتشغيل البث بالرابط المرسل
+        user_state.pop(message.chat.id, None)
+        start_live_func(message, text)
+        
     elif state == "waiting_for_new_link":
-        change_link_func(message, url)
-    
-    user_state.pop(message.chat.id, None)
+        # مسح الحالة وتغيير الرابط
+        user_state.pop(message.chat.id, None)
+        change_link_func(message, text)
 
 # --- دالة بدء البث المباشر ---
 def start_live_func(message, m3u8_url):
@@ -73,9 +83,13 @@ def start_live_func(message, m3u8_url):
     
     targeting = {"geo_locations": {"countries": ARAB_COUNTRIES}}
     
+    # جلب الوصف الذي أدخله المستخدم
+    live_description = current_stream.get("description", "بث مباشر")
+    
     fb_url = "https://graph.facebook.com/v19.0/me/live_videos"
     payload = {
-        'title': "Live Stream", 
+        'title': live_description,        # تم ربط العنوان بالوصف المرسل
+        'description': live_description,  # تم ربط الوصف بالوصف المرسل
         'status': 'LIVE_NOW', 
         'targeting': json.dumps(targeting), 
         'is_dvr_enabled': 'false', # 🔒 تعطيل خاصية إرجاع الفيديو للخلف
@@ -90,7 +104,7 @@ def start_live_func(message, m3u8_url):
 
         current_stream.update({"stream_url": response["stream_url"], "live_video_id": response["id"], "m3u8_url": m3u8_url})
         
-        # أمر FFmpeg بنظام الـ Copy المباشر والخفيف بدون تعديل أبعاد الشاشة داخل البث
+        # أمر FFmpeg بنظام الـ Copy المباشر والخفيف
         cmd = [
             'ffmpeg', '-re', 
             '-i', m3u8_url, 
@@ -99,7 +113,7 @@ def start_live_func(message, m3u8_url):
         ]
         
         current_stream["process"] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        bot.reply_to(message, "✅ تم بدء البث بنجاح!\n• البث يعمل بنظام الـ Copy الخفيف.\n• تم قفل ميزة إرجاع البث للخلف.")
+        bot.reply_to(message, f"✅ تم بدء البث بنجاح!\n• الوصف: {live_description}\n• النظام: Copy خفيف.\n• الميزات: تم قفل إرجاع الفيديو.")
     except Exception as e:
         bot.reply_to(message, f"❌ حدث خطأ أثناء تشغيل FFmpeg: {str(e)}")
 
@@ -111,7 +125,6 @@ def change_link_func(message, new_url):
         
     bot.reply_to(message, "🔄 جاري تبديل الرابط...")
     
-    # إنهاء عملية FFmpeg الحالية
     try:
         current_stream["process"].terminate()
         current_stream["process"].wait()
@@ -120,7 +133,6 @@ def change_link_func(message, new_url):
         
     current_stream["m3u8_url"] = new_url
     
-    # تشغيل الرابط الجديد مباشرة بنظام الـ Copy على نفس الـ stream_url لضمان عدم فصل اللايف
     cmd = [
         'ffmpeg', '-re', 
         '-i', new_url, 
@@ -140,7 +152,6 @@ def stop_live_func(message):
         except:
             pass
         
-        # إعلام فيسبوك بإنهاء البث بشكل رسمي
         requests.post(f"https://graph.facebook.com/v19.0/{current_stream['live_video_id']}", data={'end_live_video': 'true', 'access_token': ACCESS_TOKEN})
         current_stream["process"] = None
         bot.reply_to(message, "🏁 تم إنهاء وإغلاق البث المباشر بالكامل.")
