@@ -44,7 +44,7 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.reply_to(message, "مرحباً بك! تحكم بنظام البث المزدوج (رئيسي + احتياطي) لصفحتك:", reply_markup=get_main_menu())
+    bot.reply_to(message, "مرحباً بك! تحكم بنظام البث المزدوج (رئيسي + احتياطي) لصفحتك بعد حل المشكلة:", reply_markup=get_main_menu())
 
 # --- معالجة الأزرار ---
 @bot.callback_query_handler(func=lambda call: True)
@@ -96,7 +96,7 @@ def handle_inputs(message):
         user_state.pop(message.chat.id, None)
         change_link_func(message, text)
 
-# --- دالة البث المزدوج الذكي (رئيسي واحتياطي) ---
+# --- دالة البث المزدوج الذكي ---
 def start_live_sequence(message, m3u8_url):
     bot.send_message(message.chat.id, "⏳ جاري حجز البث المباشر ونشره كـ Post مخصص للدول العربية فقط...")
     
@@ -104,11 +104,12 @@ def start_live_sequence(message, m3u8_url):
     live_description = current_stream.get("description", "بث مباشر")
     
     fb_url = f"https://graph.facebook.com/v19.0/{PAGE_ID}/live_videos"
+    
+    # تم إزالة 'published': 'true' لأن 'LIVE_NOW' تنشر تلقائياً وتمنع التضارب
     payload = {
         'title': live_description,
         'description': live_description,
         'status': 'LIVE_NOW', 
-        'published': 'true',  # لعمل بوست (Post) رسمي ومباشر على الصفحة
         'targeting': json.dumps(targeting), 
         'is_dvr_enabled': 'false', 
         'access_token': ACCESS_TOKEN
@@ -125,10 +126,9 @@ def start_live_sequence(message, m3u8_url):
             bot.reply_to(message, f"❌ فشل جلب روابط البث من فيسبوك: {response}")
             return
 
-        # في حال لم يقم فيسبوك بإرجاع رابط احتياطي تلقائياً، نقوم بتوليده بناءً على الرئيسي لضمان عدم التوقف
         if not backup_url:
-            backup_url = main_url.replace("rtmp://", "rtmp://").replace("rtmps://", "rtmps://") 
-            bot.send_message(message.chat.id, "⚠️ تنبيه: تم استخدام الرابط الرئيسي الموحد لعدم توفر مفتاح احتياطي مستقل بالحساب.")
+            backup_url = main_url
+            bot.send_message(message.chat.id, "⚠️ تنبيه: تم استخدام الرابط الرئيسي الموحد لعدم تفعيل المفتاح الاحتياطي في إعدادات الحساب.")
 
         current_stream.update({
             "main_stream_url": main_url,
@@ -138,7 +138,7 @@ def start_live_sequence(message, m3u8_url):
             "phase": "running"
         })
         
-        bot.send_message(message.chat.id, "✅ تم نشر البث بنجاح على الصفحة!\n⚫ جاري إرسال الشاشة السوداء للمفتاح الرئيسي (لمدة دقيقتين)...\n🔵 وجاري تشغيل رابطك على المفتاح الاحتياطي بالتزامن...")
+        bot.send_message(message.chat.id, "✅ تم نشر البث بنجاح على الصفحة كـ بوست!\n⚫ جاري إرسال الشاشة السوداء للمفتاح الرئيسي (لمدة دقيقتين)...\n🔵 وجاري تشغيل رابطك على المفتاح الاحتياطي بالتزامن...")
         
         # 1. تشغيل الشاشة السوداء على المفتاح الرئيسي وتتوقف تلقائياً بعد 120 ثانية (دقيقتين)
         black_cmd = [
@@ -196,7 +196,7 @@ def change_link_func(message, new_url):
 # --- إيقاف البث بالكامل ---
 def stop_live_func(message):
     if current_stream["main_process"] or current_stream["backup_process"] or current_stream["phase"] != "idle":
-        bot.reply_to(message, "🛑 جاري إغلاق البث الرئيسي والاحتياطي وحذف الفيديو...")
+        bot.reply_to(message, "🛑 جاري إيقاف البث وإغلاق الفيديو بالكامل...")
         
         for proc_key in ["main_process", "backup_process"]:
             if current_stream[proc_key]:
