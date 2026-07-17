@@ -17,7 +17,7 @@ PAGE_ID = "1078731531992880"
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# تخزين حالة البثين (الرئيسي والاحتياطي)
+# تخزين حالة البثين
 current_stream = {
     "main_process": None,      # لعملية الشاشة السوداء
     "backup_process": None,    # لعملية رابط الـ M3U8 الخاص بك
@@ -26,7 +26,7 @@ current_stream = {
     "backup_stream_url": None,
     "m3u8_url": None, 
     "description": "بث مباشر",
-    "phase": "idle"
+    "phase": "idle"            # idle, black_screen, live
 }
 user_state = {} 
 
@@ -44,7 +44,7 @@ def get_main_menu():
 
 @bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.reply_to(message, "مرحباً بك! تحكم بنظام البث المزدوج (رئيسي + احتياطي) لصفحتك بعد حل المشكلة:", reply_markup=get_main_menu())
+    bot.reply_to(message, "مرحباً بك! تحكم بنظام البث المتوالي (شاشة سوداء أولاً ثم رابطك تلقائياً):", reply_markup=get_main_menu())
 
 # --- معالجة الأزرار ---
 @bot.callback_query_handler(func=lambda call: True)
@@ -61,18 +61,14 @@ def callback_query(call):
     elif call.data == "change_link":
         user_state[call.message.chat.id] = "waiting_for_new_link"
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "🔄 أرسل رابط الـ M3U8 الجديد لتحديث البث الاحتياطي فوراً:")
+        bot.send_message(call.message.chat.id, "🔄 أرسل رابط الـ M3U8 الجديد لتحديث البث فوراً:")
 
     elif call.data == "status":
         bot.answer_callback_query(call.id)
-        is_main_running = current_stream["main_process"] and current_stream["main_process"].poll() is None
-        is_backup_running = current_stream["backup_process"] and current_stream["backup_process"].poll() is None
-        
-        if is_main_running or is_backup_running:
-            status_msg = f"🟢 البث نشط ومستقر على الصفحة الحاليّة.\n"
-            status_msg += f"⚫ البث الرئيسي (الشاشة السوداء): {'عمل جاري ⏳' if is_main_running else 'منتهي ومحول تم ✅'}\n"
-            status_msg += f"🔵 البث الاحتياطي (رابطك): {'يعمل بنجاح 🚀' if is_backup_running else 'متوقف ❌'}\n"
-            status_msg += f"🔗 الرابط الحالي: `{current_stream['m3u8_url']}`"
+        if current_stream["phase"] == "black_screen":
+            status_msg = f"⚫ البث حالياً يعرض (شاشة سوداء دقيقتين) على المفتاح الرئيسي لإجبار الفيس بوك عليها.\n📝 الوصف: {current_stream['description']}\n🔗 رابطك المنتظر تشغيله تلقائياً: `{current_stream['m3u8_url']}`"
+        elif current_stream["phase"] == "live":
+            status_msg = f"🟢 البث يعرض الآن رابطك الـ M3U8 بنجاح وبنظام Copy المستقر.\n📝 الوصف: {current_stream['description']}\n🔗 الرابط الحالي: `{current_stream['m3u8_url']}`"
         else:
             status_msg = "🔴 البث متوقف حالياً بالكامل."
         bot.send_message(call.message.chat.id, status_msg, parse_mode="Markdown")
@@ -86,7 +82,7 @@ def handle_inputs(message):
     if state == "waiting_for_description":
         current_stream["description"] = text
         user_state[message.chat.id] = "waiting_for_link"
-        bot.send_message(message.chat.id, f"✅ تم اعتماد وصف البوست.\n🚀 الآن، أرسل رابط الـ M3U8 لتشغيله على السيرفر الاحتياطي:")
+        bot.send_message(message.chat.id, f"✅ تم اعتماد وصف البوست.\n🚀 الآن، أرسل رابط الـ M3U8 ليتم جدولة بثه بعد الشاشة السوداء:")
         
     elif state == "waiting_for_link":
         user_state.pop(message.chat.id, None)
@@ -96,7 +92,7 @@ def handle_inputs(message):
         user_state.pop(message.chat.id, None)
         change_link_func(message, text)
 
-# --- دالة البث المزدوج الذكي ---
+# --- دالة تسلسل البث الزمني الحقيقي ---
 def start_live_sequence(message, m3u8_url):
     bot.send_message(message.chat.id, "⏳ جاري حجز البث المباشر ونشره كـ Post مخصص للدول العربية فقط...")
     
@@ -104,8 +100,6 @@ def start_live_sequence(message, m3u8_url):
     live_description = current_stream.get("description", "بث مباشر")
     
     fb_url = f"https://graph.facebook.com/v19.0/{PAGE_ID}/live_videos"
-    
-    # تم إزالة 'published': 'true' لأن 'LIVE_NOW' تنشر تلقائياً وتمنع التضارب
     payload = {
         'title': live_description,
         'description': live_description,
@@ -118,7 +112,6 @@ def start_live_sequence(message, m3u8_url):
     try:
         response = requests.post(fb_url, data=payload).json()
         
-        # جلب الرابط الرئيسي والاحتياطي الآمنين
         main_url = response.get("secure_stream_url") or response.get("stream_url")
         backup_url = response.get("backup_secure_stream_url") or response.get("backup_stream_url")
         
@@ -128,17 +121,16 @@ def start_live_sequence(message, m3u8_url):
 
         if not backup_url:
             backup_url = main_url
-            bot.send_message(message.chat.id, "⚠️ تنبيه: تم استخدام الرابط الرئيسي الموحد لعدم تفعيل المفتاح الاحتياطي في إعدادات الحساب.")
 
         current_stream.update({
             "main_stream_url": main_url,
             "backup_stream_url": backup_url,
             "live_video_id": response["id"], 
             "m3u8_url": m3u8_url,
-            "phase": "running"
+            "phase": "black_screen"
         })
         
-        bot.send_message(message.chat.id, "✅ تم نشر البث بنجاح على الصفحة كـ بوست!\n⚫ جاري إرسال الشاشة السوداء للمفتاح الرئيسي (لمدة دقيقتين)...\n🔵 وجاري تشغيل رابطك على المفتاح الاحتياطي بالتزامن...")
+        bot.send_message(message.chat.id, "✅ تم نشر البث على الصفحة بنجاح!\n⚫ المرحلة الأولى: تشغيل الشاشة السوداء على المفتاح الرئيسي لمدة دقيقتين (رابطك معطل مؤقتاً لفرض الشاشة السوداء)...")
         
         # 1. تشغيل الشاشة السوداء على المفتاح الرئيسي وتتوقف تلقائياً بعد 120 ثانية (دقيقتين)
         black_cmd = [
@@ -151,52 +143,58 @@ def start_live_sequence(message, m3u8_url):
         ]
         current_stream["main_process"] = subprocess.Popen(black_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
-        # 2. تشغيل رابط الـ M3U8 الخاص بك على المفتاح الاحتياطي فوراً وبدون إنهاء
+        # انتظار انتهاء الدقيقتين تماماً لتتوقف الشاشة السوداء من تلقاء نفسها
+        current_stream["main_process"].wait()
+        
+        # التأكد من أن المستخدم لم يقم بإيقاف البث يدوياً أثناء الـ دقيقتين
+        if current_stream["phase"] == "idle":
+            return
+            
+        # 2. المرحلة الثانية: تشغيل رابط الـ M3U8 الخاص بك تلقائياً بعد اختفاء الشاشة السوداء
+        current_stream["phase"] = "live"
+        bot.send_message(message.chat.id, "🔄 انتهت الـ 2 دقائق شاشة سوداء بنجاح! جاري التبديل الآن وتمرير رابطك الـ M3U8 تلقائياً...")
+        
         copy_cmd = [
             'ffmpeg', '-re', 
-            '-i', m3u8_url, 
+            '-i', current_stream["m3u8_url"], 
             '-c', 'copy', 
             '-f', 'flv', backup_url
         ]
         current_stream["backup_process"] = subprocess.Popen(copy_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # انتظار دقيقتين للتأكيد للمستخدم
-        time.sleep(120)
-        if current_stream["phase"] == "running":
-            bot.send_message(message.chat.id, "🔄 انتهت الـ 2 دقائق شاشة سوداء! فيسبوك ينقل المشاهدين الآن تلقائياً إلى بث الرابط الاحتياطي المستقر.")
 
     except Exception as e:
         bot.reply_to(message, f"❌ حدث خطأ: {str(e)}")
 
 # --- تغيير الرابط الاحتياطي فورا ---
 def change_link_func(message, new_url):
-    if not current_stream["backup_process"] or current_stream["backup_process"].poll() is not None:
-        bot.reply_to(message, "❌ لا يوجد بث احتياطي نشط حالياً لتغييره.")
-        return
-        
-    bot.reply_to(message, "🔄 جاري تبديل الرابط على السيرفر الاحتياطي فوراً...")
-    
-    try:
-        current_stream["backup_process"].terminate()
-        current_stream["backup_process"].wait()
-    except:
-        pass
-        
     current_stream["m3u8_url"] = new_url
     
-    cmd = [
-        'ffmpeg', '-re', 
-        '-i', new_url, 
-        '-c', 'copy', 
-        '-f', 'flv', current_stream["backup_stream_url"]
-    ]
-    current_stream["backup_process"] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    bot.reply_to(message, "✅ تم تحديث الرابط على البث الاحتياطي بنجاح وبدون التأثير على المنشور.")
+    # إذا كان البث قد وصل للمرحلة الفريضة (اللايف الفعلي)، نقوم بتبديله فوراً
+    if current_stream["phase"] == "live" and current_stream["backup_process"] and current_stream["backup_process"].poll() is None:
+        bot.reply_to(message, "🔄 جاري تبديل الرابط الحالي فوراً بنظام الـ Copy الخفيف...")
+        try:
+            current_stream["backup_process"].terminate()
+            current_stream["backup_process"].wait()
+        except:
+            pass
+            
+        cmd = [
+            'ffmpeg', '-re', 
+            '-i', new_url, 
+            '-c', 'copy', 
+            '-f', 'flv', current_stream["backup_stream_url"]
+        ]
+        current_stream["backup_process"] = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        bot.reply_to(message, "✅ تم تحديث الرابط بنجاح على البث الحالي.")
+    else:
+        # إذا تم التغيير أثناء الشاشة السوداء، سيتم حفظه فقط ليشتغل تلقائياً عند انتهاء الدقيقتين
+        bot.reply_to(message, "✅ تم حفظ الرابط الجديد بنجاح، وسيتم إطلاقه تلقائياً فور انتهاء الدقيقتين للشاشة السوداء.")
 
 # --- إيقاف البث بالكامل ---
 def stop_live_func(message):
-    if current_stream["main_process"] or current_stream["backup_process"] or current_stream["phase"] != "idle":
-        bot.reply_to(message, "🛑 جاري إيقاف البث وإغلاق الفيديو بالكامل...")
+    if current_stream["phase"] != "idle":
+        bot.reply_to(message, "🛑 جاري إيقاف البث المباشر بالكامل وإغلاقه من الصفحة...")
+        current_stream["phase"] = "idle"
         
         for proc_key in ["main_process", "backup_process"]:
             if current_stream[proc_key]:
@@ -210,8 +208,7 @@ def stop_live_func(message):
         if current_stream["live_video_id"]:
             requests.post(f"https://graph.facebook.com/v19.0/{current_stream['live_video_id']}", data={'end_live_video': 'true', 'access_token': ACCESS_TOKEN})
             
-        current_stream["phase"] = "idle"
-        bot.reply_to(message, "🏁 تم إنهاء وإغلاق البث بالكامل من الصفحة بنجاح.")
+        bot.reply_to(message, "🏁 تم إنهاء وإغلاق البث بالكامل.")
     else:
         bot.reply_to(message, "❌ لا يوجد بث يعمل حالياً لإيقافه.")
 
